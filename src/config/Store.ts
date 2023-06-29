@@ -4,6 +4,7 @@ import { watch } from 'chokidar';
 import { TypedEmitter } from 'tiny-typed-emitter';
 import { exists } from './paths';
 import { jsonStringifyPretty } from '../ts/json';
+import deepEqual = require('deep-equal');
 
 const RETRY_DELAY = 10000;
 
@@ -83,6 +84,7 @@ export class Store<S extends z.ZodSchema> extends TypedEmitter<StoreEvents<S>> {
   }
 
   async save(o: z.infer<S>) {
+    if (deepEqual(o, await this.get())) return;
     await writeFile(this.file, jsonStringifyPretty(o));
   }
 }

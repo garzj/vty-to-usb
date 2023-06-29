@@ -13,6 +13,7 @@
   "license": "UNLICENSED",
   "dependencies": {
     "chokidar": "^3.5.3",
+    "deep-equal": "^2.2.1",
     "sanitize-filename": "^1.6.3",
     "serialport": "^11.0.0",
     "ssh2": "^1.14.0",
@@ -21,6 +22,7 @@
     "zod": "^3.21.4"
   },
   "devDependencies": {
+    "@types/deep-equal": "^1.0.1",
     "@types/node": "^20.3.1",
     "@types/ssh2": "^1.11.11",
     "ts-node-dev": "^2.0.0",
