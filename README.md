@@ -37,6 +37,5 @@ pm2 save
 ## Configuration info
 
 - All settings can be configured in the data directory.
-- All configurations are live updated. (Introduced some really ugly code, but works)
 - Empty passwords mean **no authentication**.
 - A port of value `0` means, the service is disabled.
