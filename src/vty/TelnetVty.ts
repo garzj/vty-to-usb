@@ -55,7 +55,7 @@ export class TelnetVty extends Vty {
       socket.on('close', () => writeSub.off());
     });
 
-    this.server.listen(port);
+    this.listen && this.server.listen(port);
 
     this.once('close', () => {
       this.server.close();

@@ -26,8 +26,8 @@ interface BridgeEvents {
 }
 
 export class Bridge extends TypedEmitter<BridgeEvents> {
-  store!: Store<ReturnType<(typeof bridgeConfigSchema)['default']>>;
-  appConfigSub: EventSubscriber;
+  config!: Store<typeof bridgeConfigSchema>;
+  appConfigSub!: EventSubscriber;
 
   serial?: SerialPort;
   serialSub?: EventSubscriber;
@@ -40,53 +40,64 @@ export class Bridge extends TypedEmitter<BridgeEvents> {
   maxSerialCache = 1000;
   serialCache = Buffer.from('');
 
-  id: string;
+  id!: string;
 
-  constructor(public app: App, public path: string, config: AppConfig) {
+  constructor(public app: App, public path: string) {
     super();
 
-    this.appConfigSub = new EventSubscriber(app.config);
+    this.setup();
+  }
+
+  async setup() {
+    // TODO: More reliable id with udev data?
+    this.id = sanitize(basename(this.path), { replacement: '_' });
+
+    console.log(`New serial connection: ${this.id}.`);
+
+    const configFile = join(serialsDir, this.id + '.json');
+    let appConf = this.app.config.getRef();
+    this.config = new Store(configFile, bridgeConfigSchema, (isNew) => {
+      const sshPort = appConf.nextPortSsh;
+      const telnetPort = appConf.nextPortTelnet;
+
+      if (isNew) {
+        appConf = this.app.config.getRef();
+        appConf.nextPortSsh++;
+        appConf.nextPortTelnet++;
+        this.app.config.write();
+      }
+
+      return {
+        sshPort: sshPort,
+        telnetPort: telnetPort,
+        baudRate: appConf.defaultBaudRate,
+        sshUser: 'user',
+        sshPassword: 'vtytousb',
+      };
+    });
+    await this.config.ensureLoaded();
+
+    this.config.on('change', () =>
+      console.log(`Applied config for bridge ${this.id}.`)
+    );
+
+    this.appConfigSub = new EventSubscriber(this.app.config);
     this.appConfigSub.on('change', (cur: AppConfig) => {
       this.maxSerialCache = cur.maxSerialCache;
       this.trimCache();
     });
-    this.app.config.get().then((cur) => {
-      this.maxSerialCache = cur.maxSerialCache;
+    this.maxSerialCache = this.app.config.getRef().maxSerialCache;
+
+    this.setupSerial(this.config.getRef());
+    this.config.on('change', (cur, prev) => {
+      if (prev.baudRate != cur.baudRate) this.setupSerial(cur);
     });
-
-    // TODO: More reliable id with udev data
-    this.id = sanitize(basename(this.path), { replacement: '_' });
-
-    this.setup(config);
 
     this.on('write', (data) => this.serial?.write(data));
 
     this.once('close', () => this.destroy());
-  }
 
-  async setup(appConf: AppConfig) {
-    const configFile = join(serialsDir, this.id + '.json');
-    this.store = new Store(
-      configFile,
-      bridgeConfigSchema.default({
-        sshPort: appConf.minPortSsh,
-        telnetPort: appConf.minPortTelnet,
-        baudRate: appConf.defaultBaudRate,
-        sshUser: 'user',
-        sshPassword: 'vtytousb',
-      })
-    );
-
-    this.store.on('change', () =>
-      console.log(`Applied config for bridge ${this.id}.`)
-    );
-
-    this.setupSerial(await this.store.get());
-    this.store.on('change', (cur, prev) => {
-      if (prev.baudRate != cur.baudRate) this.setupSerial(cur);
-    });
-
-    await this.createVtys();
+    this.createVtys();
   }
 
   private setupSerial(conf: BridgeConf) {
@@ -118,9 +129,9 @@ export class Bridge extends TypedEmitter<BridgeEvents> {
   }
 
   async createVtys() {
-    await this.setupTelnet(await this.store.get());
-    await this.setupSsh(await this.store.get());
-    this.store.on('change', async (cur, prev) => {
+    await this.setupTelnet(await this.config.getRef());
+    await this.setupSsh(await this.config.getRef());
+    this.config.on('change', async (cur, prev) => {
       if (cur.telnetPort != prev.telnetPort) await this.setupTelnet(cur);
       if (cur.sshPort != prev.sshPort) await this.setupSsh(cur);
     });
@@ -128,29 +139,21 @@ export class Bridge extends TypedEmitter<BridgeEvents> {
 
   private async setupTelnet(conf: BridgeConf) {
     this.telnetVty?.emit('close');
-
     if (conf.telnetPort === 0) return;
-
-    const port = this.app.nextFreePort(conf.telnetPort);
-    conf.telnetPort = port;
-    this.telnetVty = new TelnetVty(this, port);
-    await this.store.save(conf);
+    this.telnetVty = new TelnetVty(this, conf.telnetPort);
   }
 
   private async setupSsh(conf: BridgeConf) {
     this.sshVty?.emit('close');
-
     if (conf.sshPort === 0) return;
-
-    const port = this.app.nextFreePort(conf.sshPort);
-    conf.sshPort = port;
     this.sshVty = new SshVty(this, conf.sshPort);
-    await this.store.save(conf);
   }
 
   private destroy() {
+    console.log(`Serial disconnected: ${this.id}`);
+
     this.removeAllListeners();
-    this.store.removeAllListeners();
+    this.config.removeAllListeners();
     this.appConfigSub.off();
     this.serialSub?.off();
     this.serial?.close();

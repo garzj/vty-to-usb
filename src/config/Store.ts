@@ -12,51 +12,57 @@ interface StoreEvents<S extends z.ZodSchema> {
   change: (current: z.infer<S>, previous: z.infer<S>) => void;
 }
 
-// some poor design, will result in infinite read write loops
 export class Store<S extends z.ZodSchema> extends TypedEmitter<StoreEvents<S>> {
   private loader: Promise<z.infer<S>> | null = null;
-  private retryTimeout?: NodeJS.Timeout;
 
-  constructor(public readonly file: string, public readonly schema: S) {
+  data: z.infer<S>;
+  lastData: z.infer<S>;
+
+  creatingNew = false;
+  beforeLoad = true;
+
+  constructor(
+    public readonly file: string,
+    public readonly schema: S,
+    private getDefaultCb?: (isNew: boolean) => z.infer<S>
+  ) {
     super();
 
-    this.setup();
-  }
+    this.data = this.getDefault();
+    this.lastData = JSON.parse(JSON.stringify(this.data));
 
-  async writeDefault() {
-    let data: z.infer<S>;
-    try {
-      data = await this.schema.parseAsync(undefined);
-    } catch (e) {
-      try {
-        data = await this.schema.parseAsync({});
-      } catch (e) {
-        console.error(`Warning: Store has no default schema: ${this.file}`);
-        data = {};
-      }
-    }
-    await writeFile(this.file, jsonStringifyPretty(data));
-  }
-
-  async setup() {
-    if (!(await exists(this.file))) {
-      await this.writeDefault();
-    }
+    this.ensureLoaded();
 
     watch(this.file, { awaitWriteFinish: true })
       .on('change', async () => {
-        clearTimeout(this.retryTimeout);
-        this.retryTimeout = undefined;
-
-        const prev = await this.loader;
-        this.loader = this.load();
-        const cur = await this.loader;
-        this.emit('change', cur, prev);
+        const data = this.loadValid();
+        if (deepEqual(data, this.data)) return;
+        this.lastData = JSON.parse(JSON.stringify(this.data));
+        this.data = data;
+        this.emit('change', this.data, this.lastData);
       })
-      .on('unlink', () => this.writeDefault());
+      .on('unlink', () => this.write(undefined, true));
   }
 
-  private async load(): Promise<z.infer<S>> {
+  async ensureLoaded() {
+    if (!(await exists(this.file))) {
+      if (this.creatingNew) return await this.loadValid();
+      this.creatingNew = true;
+      this.data = this.getDefault(true);
+      return await this.write(this.data, true);
+    }
+    const data = await this.loadValid();
+    this.beforeLoad = false;
+    return data;
+  }
+
+  private async loadValid() {
+    if (this.loader) return await this.loader;
+    this.loader = this._tryLoadValid();
+    return await this.loader;
+  }
+
+  private async _tryLoadValid() {
     let data!: z.infer<S>;
     try {
       const _data = JSON.parse((await readFile(this.file)).toString());
@@ -66,25 +72,50 @@ export class Store<S extends z.ZodSchema> extends TypedEmitter<StoreEvents<S>> {
       console.error(`${e}`);
       console.error(`Retrying in ${Math.floor(RETRY_DELAY / 1000)}s.`);
       return await new Promise((resolve) => {
-        this.retryTimeout = setTimeout(() => {
-          resolve(this.load());
+        setTimeout(() => {
+          resolve(this._tryLoadValid());
         }, RETRY_DELAY);
       });
     }
     return data;
   }
 
-  async get() {
-    if (!(await exists(this.file))) {
-      await this.writeDefault();
-    }
+  getDefault(isNew = false) {
+    if (this.getDefaultCb) return this.getDefaultCb(isNew);
 
-    if (!this.loader) this.loader = this.load();
-    return await this.loader;
+    let data: z.infer<S>;
+    try {
+      data = this.schema.parse(undefined);
+    } catch (e) {
+      try {
+        data = this.schema.parse({});
+      } catch (e) {
+        console.error(`Warning: Store has no default schema: ${this.file}`);
+        data = {};
+      }
+    }
+    return data;
   }
 
-  async save(o: z.infer<S>) {
-    if (deepEqual(o, await this.get())) return;
-    await writeFile(this.file, jsonStringifyPretty(o));
+  getRef(): z.infer<S> {
+    return this.data;
+  }
+
+  async write(primitive?: z.infer<S>, force = false) {
+    if (primitive !== undefined) this.data = primitive;
+
+    if (this.beforeLoad && !force) {
+      await this.ensureLoaded();
+      this.write();
+      return;
+    }
+
+    if (!force && deepEqual(this.lastData, this.data)) return;
+
+    this.emit('change', this.data, this.lastData);
+    this.lastData = JSON.parse(JSON.stringify(this.data));
+    await writeFile(this.file, jsonStringifyPretty(this.data));
+
+    // TODO: No concurrent writing?
   }
 }

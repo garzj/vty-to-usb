@@ -38,8 +38,8 @@ export class SshVty extends Vty {
     this.server.on('connection', (client) => {
       client.on('authentication', async (ctx) => {
         // ouch
-        const appCfg = await this.bridge.app.config.get();
-        const bridgeCfg = await this.bridge.store.get();
+        const appCfg = this.bridge.app.config.getRef();
+        const bridgeCfg = this.bridge.config.getRef();
         if (appCfg.sshRootPassword === '' || bridgeCfg.sshPassword == '')
           return ctx.accept();
         if (ctx.method !== 'password') return ctx.reject();
@@ -84,7 +84,7 @@ export class SshVty extends Vty {
       });
     });
 
-    this.server.listen(port);
+    this.listen && this.server.listen(port);
 
     this.once('close', () => this.server.close());
   }
