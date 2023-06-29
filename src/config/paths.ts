@@ -18,3 +18,10 @@ export const rootDir = join(__dirname, '../..');
 
 export const dataDir = join(rootDir, 'data');
 ensureDirSync(dataDir);
+
+export const configFile = join(dataDir, 'config.json');
+
+export const serialsDir = join(dataDir, 'serials');
+ensureDirSync(serialsDir);
+
+export const sshKeyFile = join(dataDir, 'keys.json');
