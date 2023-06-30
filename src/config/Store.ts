@@ -18,7 +18,7 @@ export class Store<S extends z.ZodSchema> extends TypedEmitter<StoreEvents<S>> {
   data: z.infer<S>;
   lastData: z.infer<S>;
 
-  creatingNew = false;
+  creatingNew?: Promise<void>;
   beforeLoad = true;
 
   constructor(
@@ -35,7 +35,7 @@ export class Store<S extends z.ZodSchema> extends TypedEmitter<StoreEvents<S>> {
 
     watch(this.file, { awaitWriteFinish: true })
       .on('change', async () => {
-        const data = this.loadValid();
+        const data = await this.loadValid();
         if (deepEqual(data, this.data)) return;
         this.lastData = JSON.parse(JSON.stringify(this.data));
         this.data = data;
@@ -46,10 +46,10 @@ export class Store<S extends z.ZodSchema> extends TypedEmitter<StoreEvents<S>> {
 
   async ensureLoaded() {
     if (!(await exists(this.file))) {
-      if (this.creatingNew) return await this.loadValid();
-      this.creatingNew = true;
+      if (this.creatingNew) return await this.creatingNew;
       this.data = this.getDefault(true);
-      return await this.write(this.data, true);
+      this.creatingNew = this.write(this.data, true);
+      return await this.creatingNew;
     }
     const data = await this.loadValid();
     this.beforeLoad = false;
